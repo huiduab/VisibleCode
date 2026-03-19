@@ -1,4 +1,4 @@
-import type { Edge, Node } from '@xyflow/react';
+﻿import type { Edge, Node } from '@xyflow/react';
 
 export interface TreeNodeSnapshot {
   name: string;
@@ -25,6 +25,13 @@ export interface LogEntrySnapshot {
   inputData?: any;
 }
 
+export interface FunctionCategoryItem {
+  name: string;
+  summary: string;
+  color: string;
+  functions: string[];
+}
+
 export interface AnalysisHistoryRecord {
   id: string;
   owner: string;
@@ -37,6 +44,7 @@ export interface AnalysisHistoryRecord {
   fileList: string[];
   tree: TreeNodeSnapshot[];
   aiResult: AIAnalysisResultSnapshot | null;
+  functionCategories: FunctionCategoryItem[];
   logs: LogEntrySnapshot[];
   nodes: Node[];
   edges: Edge[];
@@ -46,6 +54,28 @@ export interface AnalysisHistoryRecord {
 
 const STORAGE_KEY = 'analysis_history_records_v1';
 const MAX_RECORDS = 20;
+
+const sanitizeLegacyText = (value: string) => {
+  const replacements: Array<[string, string]> = [
+    ['寮€濮嬪垎鏋愬嚱鏁?', '开始分析函数'],
+    ['寮€濮?AI 鍒嗘瀽椤圭洰缁撴瀯...', '开始 AI 分析项目结构...'],
+    ['寮€濮嬪垎鏋?', '开始分析 '],
+    ['(娣卞害:', '(深度:'],
+    ['鎴愬姛鎻愬彇', '成功提取'],
+    ['鐨勫瓙鍑芥暟', '的子函数'],
+    ['寮€濮嬬敓鎴愬叏鏅浘...', '开始生成全景图...'],
+    ['鍒嗘瀽鍑芥暟', '分析函数'],
+    ['澶辫触', '失败'],
+    ['姝ｅ湪鑾峰彇鏂囦欢鍐呭', '正在获取文件内容'],
+    ['鐮斿垽涓?..', '研判中...'],
+    ['椤圭洰鍏ュ彛鏂囦欢', '项目入口文件'],
+    ['鏆傛棤鏃ュ織', '暂无日志'],
+    ['鏆傛棤 AI 鍒嗘瀽鎽樿', '暂无 AI 分析摘要'],
+    ['鍙鍖栭」鐩粨鏋勶紝杞绘澗鎺㈢储鍜屽垎鏋?GitHub 浠撳簱浠ｇ爜銆?', '可视化项目结构，轻松探索和分析 GitHub 仓库代码。'],
+  ];
+
+  return replacements.reduce((text, [from, to]) => text.replaceAll(from, to), value);
+};
 
 const safeJsonParse = <T,>(value: string | null, fallback: T): T => {
   if (!value) return fallback;
@@ -114,6 +144,14 @@ export const buildAnalysisMarkdown = (record: Omit<AnalysisHistoryRecord, 'markd
   const verifiedEntryPoint = record.aiResult?.verifiedEntryPoint || '未确认';
   const callChains = buildCallChains(record.nodes, record.edges);
   const callChainMarkdown = callChains.length ? callChains.map(line => `- ${line}`).join('\n') : '- 无';
+  const categoryMarkdown = record.functionCategories.length
+    ? record.functionCategories
+        .map(category => {
+          const functions = category.functions.length ? category.functions.map(item => `  - ${item}`).join('\n') : '  - 无';
+          return `- ${category.name}：${category.summary}\n${functions}`;
+        })
+        .join('\n')
+    : '- 无';
   const logsMarkdown = record.logs.length
     ? record.logs
         .slice()
@@ -144,6 +182,7 @@ export const buildAnalysisMarkdown = (record: Omit<AnalysisHistoryRecord, 'markd
     toMarkdownSection('候选入口文件', entryPoints),
     toMarkdownSection('确认入口文件', verifiedEntryPoint + (record.aiResult?.entryPointReason ? `\n\n原因：${record.aiResult.entryPointReason}` : '')),
     toMarkdownSection('文件列表', fileListMarkdown),
+    toMarkdownSection('功能分类', categoryMarkdown),
     toMarkdownSection('完整调用链', callChainMarkdown),
     toMarkdownSection('Agent 工作日志', logsMarkdown),
   ];
@@ -151,8 +190,33 @@ export const buildAnalysisMarkdown = (record: Omit<AnalysisHistoryRecord, 'markd
   return sections.join('\n');
 };
 
+const sanitizeHistoryRecord = (record: AnalysisHistoryRecord): AnalysisHistoryRecord => ({
+  ...record,
+  aiResult: record.aiResult
+    ? {
+        ...record.aiResult,
+        summary: sanitizeLegacyText(record.aiResult.summary),
+        entryPointReason: record.aiResult.entryPointReason
+          ? sanitizeLegacyText(record.aiResult.entryPointReason)
+          : record.aiResult.entryPointReason,
+      }
+    : null,
+  functionCategories: record.functionCategories.map(category => ({
+    ...category,
+    name: sanitizeLegacyText(category.name),
+    summary: sanitizeLegacyText(category.summary),
+    functions: category.functions.map(sanitizeLegacyText),
+  })),
+  logs: record.logs.map(log => ({
+    ...log,
+    title: sanitizeLegacyText(log.title),
+    message: sanitizeLegacyText(log.message),
+  })),
+  markdownContent: sanitizeLegacyText(record.markdownContent),
+});
+
 export const getHistoryRecords = () => {
-  return safeJsonParse<AnalysisHistoryRecord[]>(localStorage.getItem(STORAGE_KEY), []);
+  return safeJsonParse<AnalysisHistoryRecord[]>(localStorage.getItem(STORAGE_KEY), []).map(sanitizeHistoryRecord);
 };
 
 export const getHistoryRecord = (owner: string, repo: string) => {

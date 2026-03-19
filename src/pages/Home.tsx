@@ -1,13 +1,36 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Github, Search, AlertCircle, Key, Check } from 'lucide-react';
+import { Github, Search, AlertCircle, Key, Trash2, Settings2, X, ArrowRight } from 'lucide-react';
 import { motion } from 'motion/react';
-import { getHistoryRecords, type AnalysisHistoryRecord } from '../lib/analysisHistory';
+import { getHistoryRecords, removeHistoryRecord, type AnalysisHistoryRecord } from '../lib/analysisHistory';
+
+interface RuntimeAiConfig {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+}
+
+const AI_API_KEY = process.env.AI_API_KEY as string | undefined;
+const BASE_URL = (process.env.BASE_URL as string | undefined)?.replace(/\/+$/, '');
+const MODEL = process.env.MODEL as string | undefined;
+const AI_API_KEY_STORAGE = 'runtime_ai_api_key';
+const BASE_URL_STORAGE = 'runtime_ai_base_url';
+const MODEL_STORAGE = 'runtime_ai_model';
+const GITHUB_TOKEN_STORAGE = 'github_token';
+
+const getRuntimeAiConfig = (): RuntimeAiConfig => ({
+  apiKey: localStorage.getItem(AI_API_KEY_STORAGE) || AI_API_KEY || '',
+  baseUrl: (localStorage.getItem(BASE_URL_STORAGE) || BASE_URL || '').replace(/\/+$/, ''),
+  model: localStorage.getItem(MODEL_STORAGE) || MODEL || '',
+});
 
 export default function Home() {
   const [url, setUrl] = useState('');
-  const [token, setToken] = useState(localStorage.getItem('github_token') || '');
-  const [showTokenInput, setShowTokenInput] = useState(!localStorage.getItem('github_token'));
+  const [token, setToken] = useState(localStorage.getItem(GITHUB_TOKEN_STORAGE) || '');
+  const [runtimeAiConfig, setRuntimeAiConfig] = useState<RuntimeAiConfig>(() => getRuntimeAiConfig());
+  const [draftAiConfig, setDraftAiConfig] = useState<RuntimeAiConfig>(() => getRuntimeAiConfig());
+  const [draftGithubToken, setDraftGithubToken] = useState(localStorage.getItem(GITHUB_TOKEN_STORAGE) || '');
+  const [showSettings, setShowSettings] = useState(false);
   const [error, setError] = useState('');
   const [historyRecords, setHistoryRecords] = useState<AnalysisHistoryRecord[]>([]);
   const navigate = useNavigate();
@@ -25,7 +48,7 @@ export default function Home() {
 
     const match = url.match(/github\.com\/([^/]+)\/([^/]+)/);
     if (!match) {
-      setError('无效的 GitHub 地址。请使用格式：https://github.com/owner/repo');
+      setError('无效的 GitHub 地址，请使用格式: https://github.com/owner/repo');
       return;
     }
 
@@ -34,161 +57,286 @@ export default function Home() {
     navigate(`/analyze?owner=${owner}&repo=${repo}`);
   };
 
+  const handleDeleteHistory = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    removeHistoryRecord(id);
+    setHistoryRecords(prev => prev.filter(record => record.id !== id));
+  };
+
+  const openSettings = () => {
+    setDraftAiConfig(getRuntimeAiConfig());
+    setDraftGithubToken(localStorage.getItem(GITHUB_TOKEN_STORAGE) || '');
+    setShowSettings(true);
+  };
+
+  const saveSettings = () => {
+    const nextConfig: RuntimeAiConfig = {
+      apiKey: draftAiConfig.apiKey.trim(),
+      baseUrl: draftAiConfig.baseUrl.trim().replace(/\/+$/, ''),
+      model: draftAiConfig.model.trim(),
+    };
+    const nextToken = draftGithubToken.trim();
+
+    if (nextConfig.apiKey) localStorage.setItem(AI_API_KEY_STORAGE, nextConfig.apiKey);
+    else localStorage.removeItem(AI_API_KEY_STORAGE);
+
+    if (nextConfig.baseUrl) localStorage.setItem(BASE_URL_STORAGE, nextConfig.baseUrl);
+    else localStorage.removeItem(BASE_URL_STORAGE);
+
+    if (nextConfig.model) localStorage.setItem(MODEL_STORAGE, nextConfig.model);
+    else localStorage.removeItem(MODEL_STORAGE);
+
+    if (nextToken) localStorage.setItem(GITHUB_TOKEN_STORAGE, nextToken);
+    else localStorage.removeItem(GITHUB_TOKEN_STORAGE);
+
+    setRuntimeAiConfig(nextConfig);
+    setToken(nextToken);
+    setShowSettings(false);
+  };
+
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-50 flex flex-col items-center justify-center p-4 relative">
-      {/* Top Right Token Manager */}
-      <div className="absolute top-4 right-4 z-50">
-        {showTokenInput ? (
-          <div className="flex items-center space-x-2 bg-zinc-900 border border-zinc-800 p-2 rounded-xl shadow-xl">
-            <Key className="w-4 h-4 text-zinc-500 ml-2" />
-            <input
-              type="password"
-              value={token}
-              onChange={(e) => {
-                setToken(e.target.value);
-                localStorage.setItem('github_token', e.target.value);
-              }}
-              className="bg-transparent border-none focus:outline-none text-sm text-zinc-200 w-48 placeholder-zinc-600"
-              placeholder="GitHub Token (可选)"
-            />
-            <button 
-              onClick={() => setShowTokenInput(false)}
-              className="p-1.5 bg-emerald-600/20 text-emerald-400 rounded-lg hover:bg-emerald-600/30 transition-colors"
-            >
-              <Check className="w-4 h-4" />
-            </button>
-          </div>
-        ) : (
-          <button 
-            onClick={() => setShowTokenInput(true)}
-            className="flex items-center space-x-2 bg-zinc-900/50 border border-zinc-800 px-3 py-2 rounded-xl hover:bg-zinc-800 transition-colors text-sm text-zinc-400 hover:text-zinc-200"
-          >
-            <Key className="w-4 h-4" />
-            <span>设置 Token</span>
-          </button>
-        )}
+    <div className="min-h-screen bg-[#0d1117] text-[#f0f6fc] px-4 py-5 md:px-8">
+      <div className="fixed right-4 top-5 z-50 md:right-8">
+        <button
+          onClick={openSettings}
+          className="inline-flex items-center gap-2 rounded-xl border border-[#30363d] bg-[#161b22] px-4 py-2.5 text-sm text-[#c9d1d9] transition-colors hover:border-[#8b949e] hover:bg-[#1f2630]"
+        >
+          <Settings2 className="h-4 w-4" />
+          <span>设置</span>
+        </button>
       </div>
 
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-2xl text-center space-y-8"
-      >
-        <div className="flex justify-center mb-8">
-          <div className="relative">
-            <div className="absolute -inset-1 bg-gradient-to-r from-emerald-500 to-indigo-500 rounded-full blur opacity-75"></div>
-            <div className="relative bg-zinc-900 rounded-full p-4">
-              <Github className="w-16 h-16 text-white" />
-            </div>
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          <h1 className="text-5xl font-bold tracking-tight font-sans">
-            Visible Code
-          </h1>
-          <p className="text-zinc-400 text-lg max-w-xl mx-auto">
-            可视化项目结构，轻松探索和分析 GitHub 仓库代码。
-          </p>
-        </div>
-
-        <form onSubmit={handleAnalyze} className="mt-12 space-y-4">
-          <div className="relative group max-w-xl mx-auto">
-            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-              <Search className="h-5 w-5 text-zinc-500 group-focus-within:text-emerald-400 transition-colors" />
-            </div>
-            <input
-              type="text"
-              value={url}
-              onChange={(e) => {
-                setUrl(e.target.value);
-                setError('');
-              }}
-              className="block w-full pl-12 pr-4 py-4 bg-zinc-900 border border-zinc-800 rounded-2xl text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all text-lg"
-              placeholder="https://github.com/owner/repo"
-            />
-          </div>
-
-          {error && (
-            <motion.div 
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              className="flex items-center justify-center space-x-2 text-red-400 text-sm"
-            >
-              <AlertCircle className="w-4 h-4" />
-              <span>{error}</span>
-            </motion.div>
-          )}
-
-          <div className="pt-4">
-            <button
-              type="submit"
-              className="inline-flex items-center justify-center px-8 py-4 text-base font-medium text-white bg-emerald-600 border border-transparent rounded-xl hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 focus:ring-offset-zinc-950 transition-colors shadow-lg shadow-emerald-900/20"
-            >
-              分析仓库
-            </button>
-          </div>
-        </form>
-      </motion.div>
-
-      <div className="w-full max-w-6xl mt-16">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-semibold text-zinc-100">历史记录</h2>
-          <span className="text-sm text-zinc-500">{historyRecords.length} 个项目</span>
-        </div>
-
-        {historyRecords.length === 0 ? (
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-8 text-center text-zinc-500">
-            暂无历史记录，先分析一个 GitHub 仓库。
-          </div>
-        ) : (
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {historyRecords.map((record) => (
-              <button
-                key={record.id}
-                type="button"
-                onClick={() => navigate(`/analyze?owner=${record.owner}&repo=${record.repo}`)}
-                className="text-left rounded-2xl border border-zinc-800 bg-zinc-900/50 p-5 hover:border-emerald-500/40 hover:bg-zinc-900 transition-colors"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="text-lg font-semibold text-zinc-100">{record.owner}/{record.repo}</div>
-                    <div className="mt-1 text-sm text-zinc-500 break-all">{record.repoUrl}</div>
-                  </div>
-                  <div className="shrink-0 rounded-full border border-zinc-700 px-2 py-1 text-xs text-zinc-400">
-                    {record.fileCount} 文件
-                  </div>
+      <div className="mx-auto min-h-[calc(100vh-2.5rem)] max-w-7xl">
+        <div className="px-0 pb-5 pt-16 md:px-2 md:pb-10 md:pt-20">
+          <div className="px-5 py-8 md:px-12 md:py-12">
+            <div className="mx-auto max-w-3xl text-center">
+              <motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}>
+                <div className="mx-auto flex h-28 w-28 items-center justify-center rounded-full border border-[#30363d] bg-[#0d1117] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                  <Github className="h-12 w-12 text-[#f0f6fc]" />
                 </div>
-
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {(record.aiResult?.languages || []).slice(0, 4).map((lang) => (
-                    <span key={lang} className="rounded-full border border-indigo-500/20 bg-indigo-500/10 px-2 py-1 text-xs text-indigo-300">
-                      {lang}
-                    </span>
-                  ))}
-                </div>
-
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {(record.aiResult?.techStack || []).slice(0, 4).map((tech) => (
-                    <span key={tech} className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-300">
-                      {tech}
-                    </span>
-                  ))}
-                </div>
-
-                <p className="mt-4 max-h-[4.5rem] overflow-hidden text-sm leading-6 text-zinc-400">
-                  {record.aiResult?.summary || '暂无 AI 分析摘要'}
+                <div className="mt-8 text-xs uppercase tracking-[0.34em] text-[#7d8590]">Visible Code</div>
+                <h1 className="mt-4 text-4xl font-semibold tracking-[-0.04em] text-white md:text-6xl">Visible Code</h1>
+                <p className="mx-auto mt-5 max-w-2xl text-sm leading-7 text-[#8b949e] md:text-base">
+                  从入口文件、框架路由到核心调用链，快速理解一个仓库真正的业务结构。
                 </p>
+              </motion.div>
 
-                <div className="mt-4 flex items-center justify-between text-xs text-zinc-500">
-                  <span>{record.branch}</span>
-                  <span>{new Date(record.updatedAt).toLocaleString()}</span>
+              <motion.form
+                onSubmit={handleAnalyze}
+                initial={{ opacity: 0, y: 18 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.08, duration: 0.35 }}
+                className="mx-auto mt-10 max-w-2xl"
+              >
+                <div className="rounded-2xl border border-[#30363d] bg-[#0d1117] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+                  <div className="flex flex-col gap-2 md:flex-row">
+                    <div className="relative flex-1">
+                      <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-[#6e7681]" />
+                      <input
+                        type="text"
+                        value={url}
+                        onChange={(e) => {
+                          setUrl(e.target.value);
+                          setError('');
+                        }}
+                        className="h-14 w-full rounded-xl border border-transparent bg-transparent pl-12 pr-4 text-base text-[#f0f6fc] placeholder:text-[#6e7681] focus:border-[#1f6feb] focus:outline-none"
+                        placeholder="https://github.com/owner/repo"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      className="inline-flex h-14 items-center justify-center gap-2 rounded-xl border border-[#238636] bg-[#238636] px-5 text-sm font-medium text-white transition-colors hover:bg-[#2ea043]"
+                    >
+                      <span>开始分析</span>
+                      <ArrowRight className="h-4 w-4" />
+                    </button>
+                  </div>
                 </div>
-              </button>
-            ))}
+
+                {error && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    className="mt-3 flex items-center justify-center gap-2 text-sm text-[#ff7b72]"
+                  >
+                    <AlertCircle className="h-4 w-4" />
+                    <span>{error}</span>
+                  </motion.div>
+                )}
+              </motion.form>
+            </div>
+
+            <div className="mx-auto mt-14 max-w-6xl">
+              <div className="mb-5 flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-medium text-[#f0f6fc]">历史记录</div>
+                  <div className="mt-1 text-xs text-[#7d8590]">最近分析过的仓库会保存在本地。</div>
+                </div>
+                <div className="rounded-full border border-[#30363d] bg-[#0d1117] px-3 py-1 text-xs text-[#8b949e]">
+                  {historyRecords.length} 个项目
+                </div>
+              </div>
+
+              {historyRecords.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-[#30363d] bg-[#0d1117]/70 px-6 py-12 text-center text-sm text-[#7d8590]">
+                  暂无历史记录，先分析一个 GitHub 仓库。
+                </div>
+              ) : (
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {historyRecords.map((record) => (
+                    <button
+                      key={record.id}
+                      type="button"
+                      onClick={() => navigate(`/analyze?owner=${record.owner}&repo=${record.repo}`)}
+                      className="group rounded-2xl border border-[#30363d] bg-[#0d1117] p-5 text-left transition-colors hover:border-[#58a6ff] hover:bg-[#161b22]"
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="truncate text-base font-semibold text-[#f0f6fc]">
+                            {record.owner}/{record.repo}
+                          </div>
+                          <div className="mt-1 line-clamp-2 break-all text-xs leading-5 text-[#7d8590]">
+                            {record.repoUrl}
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <span className="rounded-full border border-[#30363d] px-2 py-1 text-[11px] text-[#8b949e]">
+                            {record.fileCount} 文件
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => handleDeleteHistory(e, record.id)}
+                            className="rounded-lg border border-[#30363d] p-2 text-[#ff7b72] transition-colors hover:border-[#ff7b72]/50 hover:bg-[#2d1117]"
+                            title="删除历史记录"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {(record.aiResult?.languages || []).slice(0, 4).map((lang) => (
+                          <span
+                            key={lang}
+                            className="rounded-full border border-[#1f6feb]/25 bg-[#0c2d6b]/20 px-2 py-1 text-[11px] text-[#79c0ff]"
+                          >
+                            {lang}
+                          </span>
+                        ))}
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {(record.aiResult?.techStack || []).slice(0, 4).map((tech) => (
+                          <span
+                            key={tech}
+                            className="rounded-full border border-[#238636]/25 bg-[#0f2419] px-2 py-1 text-[11px] text-[#56d364]"
+                          >
+                            {tech}
+                          </span>
+                        ))}
+                      </div>
+
+                      <p className="mt-4 h-[72px] overflow-hidden text-sm leading-6 text-[#8b949e]">
+                        {record.aiResult?.summary || '暂无 AI 分析摘要'}
+                      </p>
+
+                      <div className="mt-4 flex items-center justify-between border-t border-[#21262d] pt-4 text-xs text-[#7d8590]">
+                        <span>{record.branch}</span>
+                        <span>{new Date(record.updatedAt).toLocaleString()}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-        )}
+        </div>
       </div>
+
+      {showSettings && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-xl rounded-2xl border border-[#30363d] bg-[#0d1117] shadow-2xl">
+            <div className="flex items-center justify-between border-b border-[#21262d] px-5 py-4">
+              <div>
+                <div className="text-sm font-medium text-[#f0f6fc]">本地环境设置</div>
+                <div className="mt-1 text-xs text-[#7d8590]">优先使用本地保存的配置，留空时回退到 `.env`。</div>
+              </div>
+              <button onClick={() => setShowSettings(false)} className="text-[#7d8590] transition-colors hover:text-[#f0f6fc]">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 px-5 py-5">
+              <div>
+                <label className="mb-1.5 block text-xs uppercase tracking-wider text-[#7d8590]">Base URL</label>
+                <input
+                  type="text"
+                  value={draftAiConfig.baseUrl}
+                  onChange={(e) => setDraftAiConfig(prev => ({ ...prev, baseUrl: e.target.value }))}
+                  className="w-full rounded-xl border border-[#30363d] bg-[#161b22] px-3 py-2.5 text-sm text-[#f0f6fc] focus:border-[#1f6feb] focus:outline-none"
+                  placeholder={BASE_URL || 'https://api.openai.com/v1'}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs uppercase tracking-wider text-[#7d8590]">API Key</label>
+                <input
+                  type="password"
+                  value={draftAiConfig.apiKey}
+                  onChange={(e) => setDraftAiConfig(prev => ({ ...prev, apiKey: e.target.value }))}
+                  className="w-full rounded-xl border border-[#30363d] bg-[#161b22] px-3 py-2.5 text-sm text-[#f0f6fc] focus:border-[#1f6feb] focus:outline-none"
+                  placeholder={AI_API_KEY ? '已从 .env 读取默认值' : '输入 AI API Key'}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs uppercase tracking-wider text-[#7d8590]">Model</label>
+                <input
+                  type="text"
+                  value={draftAiConfig.model}
+                  onChange={(e) => setDraftAiConfig(prev => ({ ...prev, model: e.target.value }))}
+                  className="w-full rounded-xl border border-[#30363d] bg-[#161b22] px-3 py-2.5 text-sm text-[#f0f6fc] focus:border-[#1f6feb] focus:outline-none"
+                  placeholder={MODEL || 'gpt-4o-mini'}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs uppercase tracking-wider text-[#7d8590]">GitHub Token</label>
+                <div className="relative">
+                  <Key className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#6e7681]" />
+                  <input
+                    type="password"
+                    value={draftGithubToken}
+                    onChange={(e) => setDraftGithubToken(e.target.value)}
+                    className="w-full rounded-xl border border-[#30363d] bg-[#161b22] py-2.5 pl-10 pr-3 text-sm text-[#f0f6fc] focus:border-[#1f6feb] focus:outline-none"
+                    placeholder="可选，用于提升 GitHub API 配额"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between border-t border-[#21262d] px-5 py-4">
+              <div className="text-xs text-[#7d8590]">
+                当前状态: AI {runtimeAiConfig.baseUrl || runtimeAiConfig.apiKey || runtimeAiConfig.model ? '已配置' : '使用 .env'} · GitHub {token ? '已配置' : '未配置'}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowSettings(false)}
+                  className="rounded-xl border border-[#30363d] bg-[#161b22] px-3 py-2 text-sm text-[#c9d1d9] transition-colors hover:bg-[#1f2630]"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={saveSettings}
+                  className="rounded-xl border border-[#238636] bg-[#238636] px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-[#2ea043]"
+                >
+                  保存设置
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
