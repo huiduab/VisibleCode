@@ -14,7 +14,9 @@ import {
   saveHistoryRecord,
   type AnalysisHistoryRecord,
   type FunctionCategoryItem,
+  type AnalysisSourceType,
 } from '../lib/analysisHistory';
+import { loadProjectSource, type LoadedProjectSource } from '../lib/projectSources';
 
 const FunctionNodeComponent = ({ data }: any) => {
   const fileName = data.possibleFile ? data.possibleFile.split('/').pop() : '未知文件';
@@ -849,6 +851,9 @@ const sanitizeLogEntry = (entry: LogEntry): LogEntry => ({
 export default function Analyze() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const sourceMode = (searchParams.get('mode') === 'local' ? 'local' : 'github') as AnalysisSourceType;
+  const projectId = searchParams.get('projectId');
+  const historyId = searchParams.get('historyId');
   const owner = searchParams.get('owner');
   const repo = searchParams.get('repo');
 
@@ -889,6 +894,7 @@ export default function Analyze() {
   const [showPanoramaFullscreen, setShowPanoramaFullscreen] = useState(false);
   const panoramaAnalysisCacheRef = useRef<Map<string, Array<{ name: string; possibleFile: string; usage: string; drillDownStatus: number }>>>(new Map());
   const fileContentCacheRef = useRef<Map<string, string>>(new Map());
+  const loadedSourceRef = useRef<LoadedProjectSource | null>(null);
 
   // Panel Visibility State
   const [showLeftPanel, setShowLeftPanel] = useState(true);
@@ -896,7 +902,7 @@ export default function Analyze() {
   const [showCodePanel, setShowCodePanel] = useState(true);
   const [showPanoramaPanel, setShowPanoramaPanel] = useState(true);
 
-  const historyIdRef = useRef(owner && repo ? buildHistoryId(owner, repo) : '');
+  const historyIdRef = useRef(historyId || (sourceMode === 'local' ? buildHistoryId('local', projectId || '') : (owner && repo ? buildHistoryId('github', owner, repo) : '')));
   const historyCreatedAtRef = useRef<string>('');
   const loadedFromHistoryRef = useRef(false);
   const [historyMeta, setHistoryMeta] = useState<Pick<AnalysisHistoryRecord, 'updatedAt' | 'markdownFileName'> | null>(null);
@@ -965,14 +971,14 @@ export default function Analyze() {
   }, []);
 
   useEffect(() => {
-    if (!owner || !repo) {
+    if (!owner || !repo || (sourceMode === 'local' && !projectId)) {
       navigate('/');
       return;
     }
 
-    historyIdRef.current = buildHistoryId(owner, repo);
+    historyIdRef.current = historyId || (sourceMode === 'local' ? buildHistoryId('local', projectId || '') : buildHistoryId('github', owner, repo));
     loadedFromHistoryRef.current = false;
-    setUrlInput(`https://github.com/${owner}/${repo}`);
+    setUrlInput(sourceMode === 'github' ? `https://github.com/${owner}/${repo}` : repo);
     setSelectedFile(null);
     setFileContent('');
     setFunctionCategories([]);
@@ -985,7 +991,7 @@ export default function Analyze() {
     setPanoramaError('');
     fileContentCacheRef.current.clear();
 
-    const cachedRecord = getHistoryRecord(owner, repo);
+    const cachedRecord = getHistoryRecord(historyIdRef.current);
     if (cachedRecord) {
       historyCreatedAtRef.current = cachedRecord.createdAt;
       setBranch(cachedRecord.branch);
@@ -1002,92 +1008,42 @@ export default function Analyze() {
       setError('');
       setLoading(false);
       loadedFromHistoryRef.current = true;
-      return;
     }
 
-    const fetchRepo = async () => {
+    const fetchProject = async () => {
       setLoading(true);
       setError('');
-      addLog('GitHub API', `开始分析 ${owner}/${repo}...`);
+      addLog('Project Source', `开始加载${sourceMode === 'github' ? ' GitHub ' : '本地'}项目 ${owner}/${repo}...`);
       try {
-        const headers: Record<string, string> = {};
-        if (token) {
-          headers['Authorization'] = `Bearer ${token}`;
-        }
-
-        // 1. Get default branch
-        const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers });
-        if (!repoRes.ok) {
-          if (repoRes.status === 403) throw new Error('GitHub API 速率受限，请稍后重试或配置 Token。');
-          if (repoRes.status === 404) throw new Error('未找到仓库，请检查 URL。');
-          throw new Error('获取仓库信息失败。');
-        }
-        const repoData = await repoRes.json();
-        const defaultBranch = repoData.default_branch;
-        setBranch(defaultBranch);
-        addLog('GitHub API', `仓库验证成功。默认分支: ${defaultBranch}`);
-
-        // 2. Get tree
-        const treeRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${defaultBranch}?recursive=1`, { headers });
-        if (!treeRes.ok) throw new Error('获取文件树失败。');
-        const treeData = await treeRes.json();
-        addLog('GitHub API', `成功获取文件树。总文件数: ${treeData.tree.length}`);
-
-        // 3. Build tree structure
-        const root: TreeNode[] = [];
-        const map = new Map<string, TreeNode>();
-
-        treeData.tree.forEach((item: any) => {
-          const parts = item.path.split('/');
-          const name = parts[parts.length - 1];
-          const node: TreeNode = {
-            name,
-            path: item.path,
-            type: item.type,
-            children: item.type === 'tree' ? [] : undefined
-          };
-          map.set(item.path, node);
-
-          if (parts.length === 1) {
-            root.push(node);
-          } else {
-            const parentPath = parts.slice(0, -1).join('/');
-            const parent = map.get(parentPath);
-            if (parent && parent.children) {
-              parent.children.push(node);
-            }
-          }
+        const loadedSource = await loadProjectSource({
+          sourceType: sourceMode,
+          owner,
+          repo,
+          projectId,
+          token,
         });
 
-        const sortTree = (nodes: TreeNode[]) => {
-          nodes.sort((a, b) => {
-            if (a.type === b.type) return a.name.localeCompare(b.name);
-            return a.type === 'tree' ? -1 : 1;
-          });
-          nodes.forEach(node => {
-            if (node.children) sortTree(node.children);
-          });
-        };
-        sortTree(root);
-
-        setTree(root);
+        loadedSourceRef.current = loadedSource;
+        setBranch(loadedSource.branch);
+        setTree(loadedSource.tree as TreeNode[]);
         historyCreatedAtRef.current = historyCreatedAtRef.current || new Date().toISOString();
+        addLog('Project Source', `项目加载完成。来源: ${loadedSource.sourceType}，文件数: ${extractFileList(loadedSource.tree).length}`);
       } catch (err: any) {
         setError(err.message || '发生未知错误。');
-        addLog('Error', `GitHub API 错误: ${err.message}`);
+        addLog('Error', `项目加载失败: ${err.message}`);
       } finally {
         setLoading(false);
       }
     };
 
-    fetchRepo();
-  }, [owner, repo, navigate, token, hydrateNodesFromHistory, setEdges, setNodes]);
+    fetchProject();
+  }, [owner, repo, projectId, historyId, sourceMode, navigate, token, hydrateNodesFromHistory, setEdges, setNodes]);
 
   const handleAnalyze = (e: React.FormEvent) => {
     e.preventDefault();
     const match = urlInput.match(/github\.com\/([^/]+)\/([^/]+)/);
     if (match) {
-      navigate(`/analyze?owner=${match[1]}&repo=${match[2].replace(/\.git$/, '')}`);
+      navigate(`/analyze?mode=github&owner=${match[1]}&repo=${match[2].replace(/\.git$/, '')}`);
     } else {
       setError('无效的 GitHub URL 格式。');
     }
@@ -1098,29 +1054,7 @@ export default function Analyze() {
     setLoadingFile(true);
     setFileContent('');
     try {
-      const encodedPath = path.split('/').map(encodeURIComponent).join('/');
-      let text = '';
-      
-      try {
-        // 1. 优先使用 GitHub API 获取文件内容
-        const headers: Record<string, string> = {
-          'Accept': 'application/vnd.github.v3.raw'
-        };
-        if (token) {
-          headers['Authorization'] = `Bearer ${token}`;
-        }
-        const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${encodedPath}?ref=${branch}`, { headers });
-        if (!res.ok) throw new Error(`API Error ${res.status}`);
-        text = await res.text();
-      } catch (apiErr: any) {
-        console.warn('API fetch failed, trying raw fallback...', apiErr);
-        // 2. API 失败时回退到 raw.githubusercontent.com
-        // 注意：这里不能携带 Authorization header，否则可能触发跨域预检失败
-        const rawRes = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${encodedPath}`);
-        if (!rawRes.ok) throw new Error(`Raw Error ${rawRes.status}`);
-        text = await rawRes.text();
-      }
-      
+      const text = await fetchFileContent(path);
       setFileContent(text);
     } catch (err: any) {
       console.error('File fetch error:', err);
@@ -1250,23 +1184,11 @@ ${contentToSend}
   const fetchFileContent = async (filePath: string) => {
     const cached = fileContentCacheRef.current.get(filePath);
     if (cached !== undefined) return cached;
+    if (!loadedSourceRef.current) throw new Error('项目数据源未初始化。');
 
-    const encodedPath = filePath.split('/').map(encodeURIComponent).join('/');
-    try {
-      const headers: Record<string, string> = { 'Accept': 'application/vnd.github.v3.raw' };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-      const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${encodedPath}?ref=${branch}`, { headers });
-      if (!res.ok) throw new Error(`API Error ${res.status}`);
-      const text = await res.text();
-      fileContentCacheRef.current.set(filePath, text);
-      return text;
-    } catch (apiErr) {
-      const rawRes = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${encodedPath}`);
-      if (!rawRes.ok) throw new Error(`Raw Error ${rawRes.status}`);
-      const text = await rawRes.text();
-      fileContentCacheRef.current.set(filePath, text);
-      return text;
-    }
+    const text = await loadedSourceRef.current.fetchFileContent(filePath);
+    fileContentCacheRef.current.set(filePath, text);
+    return text;
   };
 
   const buildPanoramaCacheKey = (funcName: string, filePath: string) =>
@@ -1744,10 +1666,12 @@ ${content.substring(0, 15000)}`;
     historyCreatedAtRef.current = createdAt;
 
     const record = saveHistoryRecord({
-      id: historyIdRef.current || buildHistoryId(owner, repo),
+      id: historyIdRef.current || (sourceMode === 'local' ? buildHistoryId('local', projectId || '') : buildHistoryId('github', owner, repo)),
+      sourceType: sourceMode,
+      sourceId: loadedSourceRef.current?.sourceId || historyIdRef.current,
       owner,
       repo,
-      repoUrl: `https://github.com/${owner}/${repo}`,
+      repoUrl: loadedSourceRef.current?.repoUrl || (sourceMode === 'local' ? `local://${repo}` : `https://github.com/${owner}/${repo}`),
       branch,
       createdAt,
       updatedAt: new Date().toISOString(),
@@ -2206,7 +2130,7 @@ ${content.substring(0, 15000)}`;
                         onClick={generatePanorama}
                         className="mt-4 px-4 py-2 bg-red-900/50 hover:bg-red-900/80 rounded-lg transition-colors block mx-auto"
                       >
-                        閲嶈瘯
+                        重试
                       </button>
                     </div>
                   </div>
@@ -2545,5 +2469,13 @@ function FileTreeNode({
     </div>
   );
 }
+
+
+
+
+
+
+
+
 
 
